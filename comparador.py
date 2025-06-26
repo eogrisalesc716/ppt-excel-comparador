@@ -22,7 +22,7 @@ def extract_chart_data_from_pptx(pptx_file):
                     values = series.values
                     row = [name] + list(values)
                     data.append(row)
-                df = pd.DataFrame(data, columns=["Marca"] + categories)
+                df = pd.DataFrame(data, columns=["Identificador"] + categories)
                 charts.append((slide_title or f"Diapositiva {i+1}", df))
     return charts
 
@@ -34,66 +34,47 @@ def extract_tables_from_excel(excel_file):
         tables.append((sheet_name, df))
     return tables
 
-def compare_dataframes_by_index(df1, df2):
-    df1_indexed = df1.set_index(df1.columns[0])
-    df2_indexed = df2.set_index(df2.columns[0])
-    df1_indexed = df1_indexed.sort_index().sort_index(axis=1)
-    df2_indexed = df2_indexed.sort_index().sort_index(axis=1)
+def normalize_dataframe(df):
+    df = df.copy()
+    if df.columns[0].lower() in ["marca", "identificador"]:
+        df = df.set_index(df.columns[0])
+    elif df.index.name and df.index.name.lower() in ["marca", "identificador"]:
+        pass
+    else:
+        df = df.T
+        df = df.set_index(df.columns[0])
+    df = df.sort_index().sort_index(axis=1)
+    return df
+
+def compare_dataframes_flexibly(df1, df2):
+    df1_norm = normalize_dataframe(df1)
+    df2_norm = normalize_dataframe(df2)
 
     differences = []
-    for row_label in df1_indexed.index:
-        if row_label in df2_indexed.index:
-            for col_label in df1_indexed.columns:
-                if col_label in df2_indexed.columns:
-                    val1 = df1_indexed.loc[row_label, col_label]
-                    val2 = df2_indexed.loc[row_label, col_label]
-                    if pd.isna(val1) and pd.isna(val2):
-                        continue
-                    if val1 != val2:
-                        differences.append({
-                            "Marca": row_label,
-                            "Categoría": col_label,
-                            "Valor PPT": val1,
-                            "Valor Excel": val2
-                        })
-                else:
-                    differences.append({
-                        "Marca": row_label,
-                        "Categoría": col_label,
-                        "Valor PPT": df1_indexed.loc[row_label, col_label],
-                        "Valor Excel": "No encontrado"
-                    })
-        else:
-            for col_label in df1_indexed.columns:
+    for row_label in df1_norm.index:
+        for col_label in df1_norm.columns:
+            val1 = df1_norm.at[row_label, col_label] if row_label in df1_norm.index and col_label in df1_norm.columns else None
+            val2 = df2_norm.at[row_label, col_label] if row_label in df2_norm.index and col_label in df2_norm.columns else None
+            if pd.isna(val1) and pd.isna(val2):
+                continue
+            if val1 != val2:
                 differences.append({
-                    "Marca": row_label,
+                    "Identificador": row_label,
                     "Categoría": col_label,
-                    "Valor PPT": df1_indexed.loc[row_label, col_label],
-                    "Valor Excel": "Marca no encontrada"
+                    "Valor PPT": val1,
+                    "Valor Excel": val2
                 })
     return differences
 
 def main():
-    st.title("Comparador de Gráficos: PowerPoint vs Excel (Indexado por Identificadores)")
+    st.title("Comparador de Gráficos PowerPoint vs Excel")
 
     pptx_file = st.file_uploader("Carga tu archivo PowerPoint (.pptx)", type="pptx")
     excel_file = st.file_uploader("Carga tu archivo Excel (.xlsx)", type="xlsx")
 
     if pptx_file and excel_file:
-        st.success("Archivos cargados correctamente. Procesando...")
-
         pptx_charts = extract_chart_data_from_pptx(pptx_file)
         excel_tables = extract_tables_from_excel(excel_file)
-
-        if not pptx_charts:
-            st.warning("No se encontraron gráficos con datos en el archivo PowerPoint.")
-            return
-
-        if not excel_tables:
-            st.warning("No se encontraron hojas de datos en el archivo Excel.")
-            return
-
-        st.header("Resultados de la Comparación")
 
         all_differences = []
 
@@ -101,16 +82,15 @@ def main():
             match_found = False
             for sheet_name, excel_df in excel_tables:
                 if slide_title.lower() in sheet_name.lower() or sheet_name.lower() in slide_title.lower():
-                    differences = compare_dataframes_by_index(chart_df, excel_df)
+                    differences = compare_dataframes_flexibly(chart_df, excel_df)
                     if not differences:
                         st.success(f"✅ {slide_title} coincide con la hoja '{sheet_name}' del Excel.")
                     else:
                         st.error(f"❌ {slide_title} tiene diferencias con la hoja '{sheet_name}':")
-                        df_diff = pd.DataFrame(differences)
-                        st.dataframe(df_diff)
-                        for d in differences:
-                            d["Gráfico"] = slide_title
-                            d["Hoja Excel"] = sheet_name
+                        st.dataframe(pd.DataFrame(differences))
+                        for diff in differences:
+                            diff["Gráfico"] = slide_title
+                            diff["Hoja Excel"] = sheet_name
                         all_differences.extend(differences)
                     match_found = True
                     break
@@ -120,12 +100,11 @@ def main():
                 st.dataframe(chart_df)
 
         if all_differences:
-            df_all = pd.DataFrame(all_differences)
+            st.markdown("### 📥 Descargar diferencias como Excel")
             output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_all.to_excel(writer, index=False, sheet_name="Diferencias")
+            pd.DataFrame(all_differences).to_excel(output, index=False, engine='openpyxl')
             st.download_button(
-                label="📥 Descargar diferencias como Excel",
+                label="Descargar diferencias_ppt_vs_excel.xlsx",
                 data=output.getvalue(),
                 file_name="diferencias_ppt_vs_excel.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
