@@ -27,28 +27,36 @@ def extract_chart_data_from_pptx(pptx_file):
                 charts.append((slide_title or f"Diapositiva {i+1}", df))
     return charts
 
-def extract_blocks_from_excel_by_marker(excel_file, markers):
-    wb = openpyxl.load_workbook(excel_file, data_only=True)
-    blocks = []
-    for sheet in wb.sheetnames:
-        ws = wb[sheet]
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value and isinstance(cell.value, str) and cell.value.strip().lower() in markers:
-                    start_row = cell.row
-                    start_col = cell.column
-                    data = []
-                    for r in ws.iter_rows(min_row=start_row+1, min_col=start_col, max_col=ws.max_column):
-                        row_data = [c.value for c in r if c.value is not None]
-                        if row_data:
-                            data.append(row_data)
-                        else:
-                            break
-                    if data:
-                        header = data[0]
-                        df = pd.DataFrame(data[1:], columns=header)
-                        blocks.append((cell.value.strip(), df))
-    return blocks
+
+def extract_blocks_by_slide_marker(excel_path, marker_prefix="## Diapositiva"):
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    blocks = []
+
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        current_marker = None
+        current_data = []
+        for row in ws.iter_rows(values_only=True):
+            if row and isinstance(row[0], str) and row[0].strip().lower().startswith(marker_prefix.lower()):
+                if current_marker and current_data:
+                    df = pd.DataFrame(current_data[1:], columns=current_data[0])
+                    blocks.append((current_marker, df))
+                current_marker = row[0].strip()
+                current_data = []
+            elif current_marker:
+                if all(cell is None for cell in row):
+                    if current_data:
+                        df = pd.DataFrame(current_data[1:], columns=current_data[0])
+                        blocks.append((current_marker, df))
+                        current_marker = None
+                        current_data = []
+                else:
+                    current_data.append(list(row))
+        if current_marker and current_data:
+            df = pd.DataFrame(current_data[1:], columns=current_data[0])
+            blocks.append((current_marker, df))
+    return blocks
+
 
 def normalize_dataframe(df):
     df = df.copy()
