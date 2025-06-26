@@ -3,19 +3,28 @@ import pandas as pd
 from pptx import Presentation
 from io import BytesIO
 
-def extract_tables_from_pptx(pptx_file):
+def extract_chart_data_from_pptx(pptx_file):
     prs = Presentation(pptx_file)
-    tables = []
+    charts = []
     for i, slide in enumerate(prs.slides):
+        slide_title = None
         for shape in slide.shapes:
-            if shape.has_table:
-                table = shape.table
+            if shape.has_text_frame and not slide_title:
+                text = shape.text.strip()
+                if text.lower().startswith("indicador"):
+                    slide_title = text
+            if shape.has_chart:
+                chart = shape.chart
                 data = []
-                for row in table.rows:
-                    data.append([cell.text.strip() for cell in row.cells])
-                df = pd.DataFrame(data[1:], columns=data[0])
-                tables.append((f"Diapositiva {i+1}", df))
-    return tables
+                categories = [c.label for c in chart.plots[0].categories]
+                for series in chart.series:
+                    name = series.name
+                    values = series.values
+                    row = [name] + list(values)
+                    data.append(row)
+                df = pd.DataFrame(data, columns=["Marca"] + categories)
+                charts.append((slide_title or f"Diapositiva {i+1}", df))
+    return charts
 
 def extract_tables_from_excel(excel_file):
     xls = pd.ExcelFile(excel_file, engine='openpyxl')
@@ -34,7 +43,7 @@ def compare_dataframes(df1, df2):
         return False
 
 def main():
-    st.title("Comparador de Tablas: PowerPoint vs Excel")
+    st.title("Comparador de Gráficos: PowerPoint vs Excel")
 
     pptx_file = st.file_uploader("Carga tu archivo PowerPoint (.pptx)", type="pptx")
     excel_file = st.file_uploader("Carga tu archivo Excel (.xlsx)", type="xlsx")
@@ -42,11 +51,11 @@ def main():
     if pptx_file and excel_file:
         st.success("Archivos cargados correctamente. Procesando...")
 
-        pptx_tables = extract_tables_from_pptx(pptx_file)
+        pptx_charts = extract_chart_data_from_pptx(pptx_file)
         excel_tables = extract_tables_from_excel(excel_file)
 
-        if not pptx_tables:
-            st.warning("No se encontraron tablas en el archivo PowerPoint.")
+        if not pptx_charts:
+            st.warning("No se encontraron gráficos con datos en el archivo PowerPoint.")
             return
 
         if not excel_tables:
@@ -55,17 +64,20 @@ def main():
 
         st.header("Resultados de la Comparación")
 
-        for i, (slide_name, ppt_df) in enumerate(pptx_tables):
+        for slide_title, chart_df in pptx_charts:
             match_found = False
             for sheet_name, excel_df in excel_tables:
-                if compare_dataframes(ppt_df, excel_df):
-                    st.success(f"✅ {slide_name} coincide con la hoja '{sheet_name}' del Excel.")
+                if slide_title.lower() in sheet_name.lower() or sheet_name.lower() in slide_title.lower():
+                    if compare_dataframes(chart_df, excel_df):
+                        st.success(f"✅ {slide_title} coincide con la hoja '{sheet_name}' del Excel.")
+                    else:
+                        st.error(f"❌ {slide_title} no coincide con la hoja '{sheet_name}' del Excel.")
                     match_found = True
                     break
             if not match_found:
-                st.error(f"❌ {slide_name} no coincide con ninguna hoja del Excel.")
-            with st.expander(f"Ver tabla de {slide_name}"):
-                st.dataframe(ppt_df)
+                st.warning(f"⚠️ No se encontró una hoja en Excel que coincida con el marcador '{slide_title}'.")
+            with st.expander(f"Ver datos del gráfico: {slide_title}"):
+                st.dataframe(chart_df)
 
 if __name__ == "__main__":
     main()
