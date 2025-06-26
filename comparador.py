@@ -3,6 +3,7 @@ import pandas as pd
 from pptx import Presentation
 from io import BytesIO
 import openpyxl
+import re
 
 def extract_chart_data_from_pptx(pptx_file):
     prs = Presentation(pptx_file)
@@ -12,7 +13,7 @@ def extract_chart_data_from_pptx(pptx_file):
         for shape in slide.shapes:
             if shape.has_text_frame and not slide_title:
                 text = shape.text.strip()
-                if text.lower().startswith("indicador"):
+                if text.lower().startswith("diapositiva"):
                     slide_title = text
             if shape.has_chart:
                 chart = shape.chart
@@ -27,36 +28,36 @@ def extract_chart_data_from_pptx(pptx_file):
                 charts.append((slide_title or f"Diapositiva {i+1}", df))
     return charts
 
+def extract_blocks_by_slide_marker(excel_file, marker_prefix="## Diapositiva"):
+    wb = openpyxl.load_workbook(excel_file, data_only=True)
+    blocks = []
 
-def extract_blocks_by_slide_marker(excel_path, marker_prefix="## Diapositiva"):
-    wb = openpyxl.load_workbook(excel_path, data_only=True)
-    blocks = []
-
-    for sheet in wb.sheetnames:
-        ws = wb[sheet]
-        current_marker = None
-        current_data = []
-        for row in ws.iter_rows(values_only=True):
-            if row and isinstance(row[0], str) and row[0].strip().lower().startswith(marker_prefix.lower()):
-                if current_marker and current_data:
-                    df = pd.DataFrame(current_data[1:], columns=current_data[0])
-                    blocks.append((current_marker, df))
-                current_marker = row[0].strip()
-                current_data = []
-            elif current_marker:
-                if all(cell is None for cell in row):
-                    if current_data:
-                        df = pd.DataFrame(current_data[1:], columns=current_data[0])
-                        blocks.append((current_marker, df))
-                        current_marker = None
-                        current_data = []
-                else:
-                    current_data.append(list(row))
-        if current_marker and current_data:
-            df = pd.DataFrame(current_data[1:], columns=current_data[0])
-            blocks.append((current_marker, df))
-    return blocks
-
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        current_marker = None
+        current_data = []
+        for row in ws.iter_rows(values_only=True):
+            if row and isinstance(row[0], str):
+                clean_cell = re.sub(r'[\x00-\x1F\x7F]', '', row[0]).strip()
+                if clean_cell.lower().startswith(marker_prefix.lower()):
+                    if current_marker and current_data:
+                        df = pd.DataFrame(current_data[1:], columns=current_data[0])
+                        blocks.append((current_marker, df))
+                    current_marker = clean_cell
+                    current_data = []
+                elif current_marker:
+                    if all(cell is None for cell in row):
+                        if current_data:
+                            df = pd.DataFrame(current_data[1:], columns=current_data[0])
+                            blocks.append((current_marker, df))
+                            current_marker = None
+                            current_data = []
+                    else:
+                        current_data.append(list(row))
+        if current_marker and current_data:
+            df = pd.DataFrame(current_data[1:], columns=current_data[0])
+            blocks.append((current_marker, df))
+    return blocks
 
 def normalize_dataframe(df):
     df = df.copy()
@@ -91,24 +92,24 @@ def compare_dataframes_flexibly(df1, df2):
     return differences
 
 def main():
-    st.title("Comparador de Gráficos PowerPoint vs Excel (con marcadores)")
+    st.title("Comparador de Gráficos PowerPoint vs Excel (por marcador ## Diapositiva X)")
 
     pptx_file = st.file_uploader("Carga tu archivo PowerPoint (.pptx)", type="pptx")
     excel_file = st.file_uploader("Carga tu archivo Excel (.xlsx)", type="xlsx")
 
     if pptx_file and excel_file:
         pptx_charts = extract_chart_data_from_pptx(pptx_file)
-        excel_blocks = extract_blocks_from_excel_by_marker(excel_file, markers=["indicador 1", "indicador 2"])
+        excel_blocks = extract_blocks_by_slide_marker(excel_file)
 
         all_differences = []
 
         for slide_title, chart_df in pptx_charts:
             match_found = False
             for block_title, excel_df in excel_blocks:
-                if slide_title.lower() == block_title.lower():
+                if slide_title.lower() in block_title.lower():
                     differences = compare_dataframes_flexibly(chart_df, excel_df)
                     if not differences:
-                        st.success(f"✅ {slide_title} coincide con el bloque '{block_title}' del Excel.")
+                        st.success(f"✅ {slide_title} coincide con el bloque '{block_title}'.")
                     else:
                         st.error(f"❌ {slide_title} tiene diferencias con el bloque '{block_title}':")
                         st.dataframe(pd.DataFrame(differences))
