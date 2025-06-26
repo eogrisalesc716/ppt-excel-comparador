@@ -91,6 +91,9 @@ def compare_dataframes_flexibly(df1, df2):
                 })
     return differences
 
+def normalize_title(text):
+    return text.lower().replace("##", "").strip()
+
 def main():
     st.title("Comparador de Gráficos PowerPoint vs Excel (por marcador ## Diapositiva X)")
 
@@ -106,7 +109,7 @@ def main():
         for slide_title, chart_df in pptx_charts:
             match_found = False
             for block_title, excel_df in excel_blocks:
-                if slide_title.lower() in block_title.lower():
+                if normalize_title(slide_title) == normalize_title(block_title):
                     differences = compare_dataframes_flexibly(chart_df, excel_df)
                     if not differences:
                         st.success(f"✅ {slide_title} coincide con el bloque '{block_title}'.")
