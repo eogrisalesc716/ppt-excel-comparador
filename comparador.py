@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from pptx import Presentation
 from io import BytesIO
+import openpyxl
 
 def extract_chart_data_from_pptx(pptx_file):
     prs = Presentation(pptx_file)
@@ -26,23 +27,38 @@ def extract_chart_data_from_pptx(pptx_file):
                 charts.append((slide_title or f"Diapositiva {i+1}", df))
     return charts
 
-def extract_tables_from_excel(excel_file):
-    xls = pd.ExcelFile(excel_file, engine='openpyxl')
-    tables = []
-    for sheet_name in xls.sheet_names:
-        df = pd.read_excel(xls, sheet_name=sheet_name, engine='openpyxl')
-        tables.append((sheet_name, df))
-    return tables
+def extract_blocks_from_excel_by_marker(excel_file, markers):
+    wb = openpyxl.load_workbook(excel_file, data_only=True)
+    blocks = []
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value and isinstance(cell.value, str) and cell.value.strip().lower() in markers:
+                    start_row = cell.row
+                    start_col = cell.column
+                    data = []
+                    for r in ws.iter_rows(min_row=start_row+1, min_col=start_col, max_col=ws.max_column):
+                        row_data = [c.value for c in r if c.value is not None]
+                        if row_data:
+                            data.append(row_data)
+                        else:
+                            break
+                    if data:
+                        header = data[0]
+                        df = pd.DataFrame(data[1:], columns=header)
+                        blocks.append((cell.value.strip(), df))
+    return blocks
 
 def normalize_dataframe(df):
     df = df.copy()
     if df.columns[0].lower() in ["marca", "identificador"]:
         df = df.set_index(df.columns[0])
-    elif df.index.name and df.index.name.lower() in ["marca", "identificador"]:
-        pass
     else:
         df = df.T
-        df = df.set_index(df.columns[0])
+        df.columns = df.iloc[0]
+        df = df[1:]
+        df.index.name = "Identificador"
     df = df.sort_index().sort_index(axis=1)
     return df
 
@@ -67,35 +83,35 @@ def compare_dataframes_flexibly(df1, df2):
     return differences
 
 def main():
-    st.title("Comparador de Gráficos PowerPoint vs Excel")
+    st.title("Comparador de Gráficos PowerPoint vs Excel (con marcadores)")
 
     pptx_file = st.file_uploader("Carga tu archivo PowerPoint (.pptx)", type="pptx")
     excel_file = st.file_uploader("Carga tu archivo Excel (.xlsx)", type="xlsx")
 
     if pptx_file and excel_file:
         pptx_charts = extract_chart_data_from_pptx(pptx_file)
-        excel_tables = extract_tables_from_excel(excel_file)
+        excel_blocks = extract_blocks_from_excel_by_marker(excel_file, markers=["indicador 1", "indicador 2"])
 
         all_differences = []
 
         for slide_title, chart_df in pptx_charts:
             match_found = False
-            for sheet_name, excel_df in excel_tables:
-                if slide_title.lower() in sheet_name.lower() or sheet_name.lower() in slide_title.lower():
+            for block_title, excel_df in excel_blocks:
+                if slide_title.lower() == block_title.lower():
                     differences = compare_dataframes_flexibly(chart_df, excel_df)
                     if not differences:
-                        st.success(f"✅ {slide_title} coincide con la hoja '{sheet_name}' del Excel.")
+                        st.success(f"✅ {slide_title} coincide con el bloque '{block_title}' del Excel.")
                     else:
-                        st.error(f"❌ {slide_title} tiene diferencias con la hoja '{sheet_name}':")
+                        st.error(f"❌ {slide_title} tiene diferencias con el bloque '{block_title}':")
                         st.dataframe(pd.DataFrame(differences))
                         for diff in differences:
                             diff["Gráfico"] = slide_title
-                            diff["Hoja Excel"] = sheet_name
+                            diff["Bloque Excel"] = block_title
                         all_differences.extend(differences)
                     match_found = True
                     break
             if not match_found:
-                st.warning(f"⚠️ No se encontró una hoja en Excel que coincida con el marcador '{slide_title}'.")
+                st.warning(f"⚠️ No se encontró un bloque en Excel que coincida con el marcador '{slide_title}'.")
             with st.expander(f"Ver datos del gráfico: {slide_title}"):
                 st.dataframe(chart_df)
 
